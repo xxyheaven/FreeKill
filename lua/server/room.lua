@@ -265,7 +265,11 @@ end
 ---@param cardId integer | Card @ 要获得区域的那张牌，可以是Card或者一个id
 ---@return CardArea @ 这张牌的区域
 function Room:getCardArea(cardId)
-  local cardIds = table.map(Card:getIdList(cardId), function(cid) return self.card_place[cid] or Card.Unknown end)
+  local cardIds = {}
+  for _, cid in ipairs(Card:getIdList(cardId)) do
+    local place = self.card_place[cid] or Card.Unknown
+    table.insertIfNeed(cardIds, place)
+  end
   return #cardIds == 1 and cardIds[1] or Card.Unknown
 end
 
@@ -655,6 +659,45 @@ function Room:changeKingdom(player, kingdom, sendLog)
   })
 end
 
+--- 房间信息摘要，返回房间的大致信息
+--- 用于旁观和重连，但也可用于debug
+function Room:getSummary(player, observe)
+  local printed_cards = {}
+  for i = -2, -math.huge, -1 do
+    local c = Fk.printed_cards[i]
+    if not c then break end
+    table.insert(printed_cards, { c.name, c.suit, c.number })
+  end
+
+  local players = {}
+  for _, p in ipairs(self.players) do
+    players[tostring(p.id)] = p:getSummary(player, observe)
+  end
+
+  local cmarks = {}
+  for k, v in pairs(self.card_marks) do
+    cmarks[tostring(k)] = v
+  end
+
+  return {
+    you = player.id or player:getId(),
+    -- data for EnterRoom
+    d = {
+      -- #self.players, 留给客户端自己思考
+      self.timeout,
+      self.settings,
+    },
+    pc = printed_cards,
+    cm = cmarks,
+    b = self.banners,
+
+    circle = table.map(self.players, Util.IdMapper),
+    p = players,
+    rnd = self:getTag("RoundCount") or 0,
+    dp = #self.draw_pile,
+  }
+end
+
 ------------------------------------------------------------------------
 -- 网络通信有关
 ------------------------------------------------------------------------
@@ -883,7 +926,7 @@ function Room:notifyMoveCards(players, card_moves, forceVisible)
 
       if not (move.moveVisible or forceVisible or containArea(move.toArea, move.to and p.isBuddy and p:isBuddy(move.to))) then
         for _, info in ipairs(move.moveInfo) do
-          if not containArea(info.fromArea, move.from == p.id) then
+          if not containArea(info.fromArea, move.from and p.isBuddy and p:isBuddy(move.from)) then
             info.cardId = -1
           end
         end
@@ -3092,7 +3135,7 @@ function Room:drawCards(player, num, skillName, fromPlace)
     fromPlace = fromPlace,
   }
   if self.logic:trigger(fk.BeforeDrawCard, player, drawData) then
-    self.logic:breakEvent(false)
+    return {}
   end
 
   num = drawData.num
@@ -3837,7 +3880,7 @@ end
 
 --- 刷新使命技状态
 ---@param player ServerPlayer
----@param skillName Suit
+---@param skillName string
 ---@param failed? boolean
 function Room:updateQuestSkillState(player, skillName, failed)
   assert(Fk.skills[skillName].frequency == Skill.Quest)
